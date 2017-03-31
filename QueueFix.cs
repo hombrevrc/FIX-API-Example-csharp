@@ -1,52 +1,121 @@
 using FIX_API_Library;
 using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data;
-using System.Drawing;
-using System.Linq;
-using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading;
-using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Collections;
+using System.Threading;
 
 namespace FIX_API_Sample
 {
     public partial class frmFIXAPISample : Form
     {
-        private int _pricePort = 5201;
-        private int _tradePort = 5202;
+        private int _pricePort = 5211;
+        private int _tradePort = 5212;
+        /*
+        private string _host = "h28.p.ctrader.com";
+        private string _username = "3006156";
+        private string _password = "sp0tw@re";
+        private string _senderCompID = "sales.3006156";
+        private string _senderSubID = "3006156";
+        */
 
-        private string _host = "h20.p.ctrader.com";
-        private string _username = "9951960";
-        private string _password = "6666%XX";
-        private string _senderCompID = "fxpro.9951960";
-        private string _senderSubID = "fxpro.9951960";
+        private string _host = "h23.p.ctrader.com";
+        private string _username = "9998871";
+        private string _password = "5065";
+        private string _senderCompID = "fxpro.9998871";
+        private string _senderSubID = "9998871";
+        
         private string _targetCompID = "CSERVER";
 
         // Add queue with messages
         public static Queue xQueuePrice = new Queue();
         public static Queue xQueueTrade = new Queue();
- 
+
         private int _messageSequenceNumber = 1;
         private int _testRequestID = 1;
-        TcpClient _priceClient;
-        NetworkStream _priceStream;
-        TcpClient _tradeClient;
-        NetworkStream _tradeStream;
-        MessageConstructor _messageConstructor;
+        private TcpClient _priceClient;
+        private SslStream _priceStreamSSL;
+        private TcpClient _tradeClient;
+        private SslStream _tradeStreamSSL;
+        private MessageConstructor _messageConstructor;
 
         public frmFIXAPISample()
         {
             InitializeComponent();
-             _priceClient = new TcpClient(_host, _pricePort);           
-            _priceStream = _priceClient.GetStream();            
-            _tradeClient = new TcpClient(_host, _tradePort);
-            _tradeStream = _tradeClient.GetStream();
-            _messageConstructor = new MessageConstructor(_host, _username, _password, _senderCompID, _senderSubID, _targetCompID);
+            try{
+
+                /*
+                Thread Looper = new Thread(new ThreadStart(SendFromQueueTrade));
+                Looper.Start();
+
+                Thread Looper1 = new Thread(new ThreadStart(SendFromQueuePrice));
+                Looper1.Start();
+                */
+
+                _priceClient = new TcpClient(_host, _pricePort);
+                _priceStreamSSL = new SslStream(_priceClient.GetStream(), false, new RemoteCertificateValidationCallback(ValidateServerCertificate), null);
+                _priceStreamSSL.AuthenticateAsClient(_host);
+                _tradeClient = new TcpClient(_host, _tradePort);
+                _tradeStreamSSL = new SslStream(_tradeClient.GetStream(), false, new RemoteCertificateValidationCallback(ValidateServerCertificate), null);
+                _tradeStreamSSL.AuthenticateAsClient(_host);
+                _messageConstructor = new MessageConstructor(_host, _username, _password, _senderCompID, _senderSubID, _targetCompID);
+                }catch(Exception e){
+                    MessageBox.Show(e.ToString());
+                }
+        }
+
+
+        // refresh from another thread
+        public void RefreshTextBox(string value)
+        {
+            if (InvokeRequired)
+            {
+                this.Invoke(new Action<string>(RefreshTextBox), new object[] { value });
+                return;
+            }
+            txtMessageReceived.Text += value;
+        }
+
+        private void SendFromQueueTrade()
+        {
+        while (true)
+            {
+            if (xQueueTrade.Count > 0)
+                {
+                string message = xQueueTrade.Dequeue().ToString();
+                // txtMessageReceived.Text = SendPriceMessage(message);
+                string msg = SendPriceMessage(message);
+                // Gets executed on a seperate thread and doesn't block the UI while sleeping            
+                RefreshTextBox(msg);
+                }
+            }
+        }
+
+        private void SendFromQueuePrice()
+        {
+        while (true)
+            {
+            if (xQueuePrice.Count > 0)
+                {
+                string message = xQueuePrice.Dequeue().ToString();
+                // txtMessageReceived.Text = SendPriceMessage(message);
+                string msg = SendPriceMessage(message);
+                // Gets executed on a seperate thread and doesn't block the UI while sleeping            
+                RefreshTextBox(msg);
+                }
+            }
+        }
+
+        private static bool ValidateServerCertificate(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors sslPolicyErrors)
+        {
+            if (sslPolicyErrors == SslPolicyErrors.None)
+                return true;
+            Console.WriteLine("Certificate error: {0}", sslPolicyErrors);
+            return false;
         }
 
         private void ClearText()
@@ -55,52 +124,50 @@ namespace FIX_API_Sample
             txtMessageReceived.Text = "";
         }
 
-        private string SendPriceMessage(string message)
+        private string SendPriceMessage(string message, bool readResponse = true)
         {
             xQueuePrice.Enqueue(message);
             string o = "";
-            foreach (string v in xQueuePrice)
+            string msg = "";
+            while (xQueuePrice.Count > 0)
             {
-                o = o + v;
+                msg = xQueuePrice.Dequeue().ToString();
+                o = o + SendMessage(msg, _priceStreamSSL, readResponse) + "|||";
             }
-            //MessageBox.Show(o);
-            return SendMessage(message, _priceStream, xQueuePrice);
+            return o; 
         }
 
-        private string SendTradeMessage(string message)
+        private string SendTradeMessage(string message, bool readResponse = true)
         {
             xQueueTrade.Enqueue(message);
             string o = "";
-            foreach (string v in xQueueTrade)
+            string msg = "";
+            while (xQueueTrade.Count > 0)
             {
-                o = o + v;
-            }            
-            //MessageBox.Show(o);
-            return SendMessage(message, _tradeStream, xQueueTrade);
+                msg = xQueueTrade.Dequeue().ToString();
+                o = o + SendMessage(msg, _tradeStreamSSL, readResponse) + "|||";
+            }
+            return o; 
         }
 
-        private string SendMessage(string message, NetworkStream stream, Queue xQueue)
+        private string SendMessage(string message, SslStream stream, bool readResponse = true)
         {
-        //MessageBox.Show("" + xQueue.Count);
-        if (xQueue.Count > 0)
-            {
-            message = xQueue.Dequeue().ToString();
-            var byteArray = Encoding.ASCII.GetBytes(message);
-            stream.Write(byteArray, 0, byteArray.Length);
-            var buffer = new byte[1024];
-            int i = 0;
-            while (!stream.DataAvailable && i < 100)
+            try{
+                var byteArray = Encoding.ASCII.GetBytes(message);
+                stream.Write(byteArray, 0, byteArray.Length);
+                var buffer = new byte[8192];
+                if (readResponse)
                 {
-                Thread.Sleep(100);
-                i++;
+                    Thread.Sleep(100);
+                    stream.Read(buffer, 0, 8192);
                 }
-            if (stream.DataAvailable)
-                stream.Read(buffer, 0, 1024);
-            _messageSequenceNumber++;
-            var returnMessage = Encoding.ASCII.GetString(buffer);
-            return returnMessage;
+                _messageSequenceNumber++;
+                var returnMessage = Encoding.ASCII.GetString(buffer);
+                return returnMessage;
+            }catch(Exception e){
+                // return e.ToString(); 
+                return "[ERROR_SEND]";
             }
-        return "Empty queue"; 
         }
 
         private void btnLogon_Click(object sender, EventArgs e)
@@ -108,13 +175,14 @@ namespace FIX_API_Sample
             ClearText();
             var message = _messageConstructor.LogonMessage(MessageConstructor.SessionQualifier.QUOTE, _messageSequenceNumber, 30, false);
             txtMessageSend.Text = message;
+            //xQueuePrice.Enqueue(message);
             txtMessageReceived.Text = SendPriceMessage(message);
-        }       
+        }
 
         private void btnTestRequest_Click(object sender, EventArgs e)
         {
             ClearText();
-            var message = _messageConstructor.TestRequestMessage(MessageConstructor.SessionQualifier.QUOTE, _messageSequenceNumber,_testRequestID);
+            var message = _messageConstructor.TestRequestMessage(MessageConstructor.SessionQualifier.QUOTE, _messageSequenceNumber, _testRequestID);
             _testRequestID++;
             txtMessageSend.Text = message;
             txtMessageReceived.Text = SendPriceMessage(message);
@@ -124,7 +192,7 @@ namespace FIX_API_Sample
         {
             ClearText();
             var message = _messageConstructor.LogoutMessage(MessageConstructor.SessionQualifier.QUOTE, _messageSequenceNumber);
-            txtMessageSend.Text = message;         
+            txtMessageSend.Text = message;
             txtMessageReceived.Text = SendPriceMessage(message);
             _messageSequenceNumber = 1;
         }
@@ -132,7 +200,7 @@ namespace FIX_API_Sample
         private void btnMarketDataRequest_Click(object sender, EventArgs e)
         {
             ClearText();
-            var message = _messageConstructor.MarketDataRequestMessage(MessageConstructor.SessionQualifier.QUOTE, _messageSequenceNumber, "EURUSD:WDqsoT", 1,0,0,1,1);
+            var message = _messageConstructor.MarketDataRequestMessage(MessageConstructor.SessionQualifier.QUOTE, _messageSequenceNumber, "EURUSD:WDqsoT", 1, 0, 0, 1, 1);
             txtMessageSend.Text = message;
             txtMessageReceived.Text = SendPriceMessage(message);
         }
@@ -142,13 +210,13 @@ namespace FIX_API_Sample
             ClearText();
             var message = _messageConstructor.HeartbeatMessage(MessageConstructor.SessionQualifier.QUOTE, _messageSequenceNumber);
             txtMessageSend.Text = message;
-            txtMessageReceived.Text = SendPriceMessage(message);
+            txtMessageReceived.Text = SendPriceMessage(message,false);
         }
 
         private void btnResendRequest_Click(object sender, EventArgs e)
         {
             ClearText();
-            var message = _messageConstructor.ResendMessage(MessageConstructor.SessionQualifier.QUOTE, _messageSequenceNumber,_messageSequenceNumber - 1);
+            var message = _messageConstructor.ResendMessage(MessageConstructor.SessionQualifier.QUOTE, _messageSequenceNumber, _messageSequenceNumber - 1);
             _testRequestID++;
             txtMessageSend.Text = message;
             txtMessageReceived.Text = SendPriceMessage(message);
@@ -157,7 +225,7 @@ namespace FIX_API_Sample
         private void btnReject_Click(object sender, EventArgs e)
         {
             ClearText();
-             var message = _messageConstructor.RejectMessage(MessageConstructor.SessionQualifier.QUOTE, _messageSequenceNumber,0);
+            var message = _messageConstructor.RejectMessage(MessageConstructor.SessionQualifier.QUOTE, _messageSequenceNumber, 0);
             _testRequestID++;
             txtMessageSend.Text = message;
             txtMessageReceived.Text = SendPriceMessage(message);
@@ -166,7 +234,7 @@ namespace FIX_API_Sample
         private void btnSequenceReset_Click(object sender, EventArgs e)
         {
             ClearText();
-            var message = _messageConstructor.SequenceResetMessage(MessageConstructor.SessionQualifier.QUOTE, _messageSequenceNumber,0);
+            var message = _messageConstructor.SequenceResetMessage(MessageConstructor.SessionQualifier.QUOTE, _messageSequenceNumber, 0);
             _testRequestID++;
             txtMessageSend.Text = message;
             txtMessageReceived.Text = SendPriceMessage(message);
@@ -175,7 +243,7 @@ namespace FIX_API_Sample
         private void btnNewOrderSingle_Click(object sender, EventArgs e)
         {
             ClearText();
-            var message = _messageConstructor.NewOrderSingleMessage(MessageConstructor.SessionQualifier.TRADE, _messageSequenceNumber, "1408471", 1,1, DateTime.UtcNow.ToString("yyyyMMdd-HH:mm:ss"), 1000,1, "1");
+            var message = _messageConstructor.NewOrderSingleMessage(MessageConstructor.SessionQualifier.TRADE, _messageSequenceNumber, "1408471", 1, 1, DateTime.UtcNow.ToString("yyyyMMdd-HH:mm:ss"), 1000, 1, "1");
             _testRequestID++;
             txtMessageSend.Text = message;
             txtMessageReceived.Text = SendTradeMessage(message);
@@ -198,7 +266,7 @@ namespace FIX_API_Sample
         private void btnRequestForPositions_Click(object sender, EventArgs e)
         {
             ClearText();
-            var message = _messageConstructor.RequestForPositions(MessageConstructor.SessionQualifier.TRADE, _messageSequenceNumber, "1408471");
+            var message = _messageConstructor.RequestForPositions(MessageConstructor.SessionQualifier.TRADE, _messageSequenceNumber, "1408471", "");
             _testRequestID++;
             txtMessageSend.Text = message;
             txtMessageReceived.Text = SendTradeMessage(message);
@@ -209,7 +277,8 @@ namespace FIX_API_Sample
             ClearText();
             var message = _messageConstructor.LogonMessage(MessageConstructor.SessionQualifier.TRADE, _messageSequenceNumber, 30, false);
             txtMessageSend.Text = message;
-            txtMessageReceived.Text = SendTradeMessage(message);
+            // xQueueTrade.Enqueue(message);
+            txtMessageReceived.Text = SendTradeMessage(message);            
         }
 
         private void btnHeartbeatT_Click(object sender, EventArgs e)
@@ -217,7 +286,7 @@ namespace FIX_API_Sample
             ClearText();
             var message = _messageConstructor.HeartbeatMessage(MessageConstructor.SessionQualifier.TRADE, _messageSequenceNumber);
             txtMessageSend.Text = message;
-            txtMessageReceived.Text = SendTradeMessage(message);
+            txtMessageReceived.Text = SendTradeMessage(message, false);
         }
 
         private void btnTestRequestT_Click(object sender, EventArgs e)
@@ -258,7 +327,7 @@ namespace FIX_API_Sample
         private void btnStopOrder_Click(object sender, EventArgs e)
         {
             ClearText();
-            var message = _messageConstructor.NewOrderSingleMessage(MessageConstructor.SessionQualifier.TRADE, _messageSequenceNumber, "10", 1, 1, DateTime.UtcNow.ToString("yyyyMMdd-HH:mm:ss"), 1000, 3, "3",0, (decimal)1.08);
+            var message = _messageConstructor.NewOrderSingleMessage(MessageConstructor.SessionQualifier.TRADE, _messageSequenceNumber, "10", 1, 1, DateTime.UtcNow.ToString("yyyyMMdd-HH:mm:ss"), 1000, 3, "3", 0, (decimal)1.08);
             _testRequestID++;
             txtMessageSend.Text = message;
             txtMessageReceived.Text = SendTradeMessage(message);
@@ -267,7 +336,7 @@ namespace FIX_API_Sample
         private void btnLimitOrder_Click(object sender, EventArgs e)
         {
             ClearText();
-            var message = _messageConstructor.NewOrderSingleMessage(MessageConstructor.SessionQualifier.TRADE, _messageSequenceNumber, "10", 1, 1, DateTime.UtcNow.ToString("yyyyMMdd-HH:mm:ss"), 1000,2, "3", (decimal)1.08);
+            var message = _messageConstructor.NewOrderSingleMessage(MessageConstructor.SessionQualifier.TRADE, _messageSequenceNumber, "10", 1, 1, DateTime.UtcNow.ToString("yyyyMMdd-HH:mm:ss"), 1000, 2, "3", (decimal)1.08);
             _testRequestID++;
             txtMessageSend.Text = message;
             txtMessageReceived.Text = SendTradeMessage(message);
